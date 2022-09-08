@@ -17,14 +17,16 @@ except Exception as e:
     pass
 
 
-from Dashboard.pages.Metrics.metrics import plot_traybot_usage, plot_market_share_data
-page = st.sidebar.radio("Page selector", ["Traybot_usage", "Market_share", "Trades_scatter"], index=0)
+from Dashboard.pages.Metrics.metrics import plot_traybot_usage, plot_market_share_data, plot_trade_data
+page = st.sidebar.radio("Page selector", ["Traybot_usage", "Market_share", "Trades_scatter"], index=2)
 
     
 if page == "Traybot_usage":
     plot_traybot_usage()
 elif page == 'Market_share':
     plot_market_share_data()
+elif page == "Trades_scatter":
+    plot_trade_data()
 
 else:
     st.write("TO BE IMPLEMENTED")
