@@ -44,9 +44,18 @@ daymap = {0: "Mon", 1: "Tue", 2: "Wed",
           3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
 indmap = {True: "Weekday", False: "Weekend"}
 
+mkts = ("TTF", "TTF ICE", "THE", "THE H", "THE L", "ZTP", "ZTP L", "VTP DA", "VTP WD", "PEG", "ETF", "NBP ICE")
+inst_names = ["TTF Hi Cal 51.6", "TTF Hi Cal 51.6 ICE", "THE", "THE Hi Cal", "THE Low Cal", "ZTP", "ZTP Low Cal",
+              "CEGH VTP", "CEGH VTP Within Day", "PEG", "ETF", "NBP ICE", "THE L East (Hour)", "THE L West (Hour)"]
+inst_map = {k: v for k,v in zip(mkts, inst_names)}
+inst_ids = (10002806, 10002228, 10002148, 10002785, 10641458, 10002940, 10641476, 10641392,
+          10641400,  10642951, 10641346, 10006025, 10000312, 10000310)
+inst_id_map = {k: v for k,v in zip(inst_names, inst_ids)}
+
+
 
 def fetch_traybot_volume_vals():
-    query= f"""
+    query= """
             Select concat_ws('-', f.YearCet, f.MonthCet, f.DayCet) as [Date], f.Execution, sum(f.[Value]) as NominalValue, sum(f.[Volume]) as Volume from
             (SELECT
                   FORMAT(datepart(year, TradeTimestampCet), 'D4') as YearCet
@@ -120,7 +129,7 @@ def plot_traybot_usage():
 # a.to_csv("Daily_values_per_us_or_not.csv", index=False)
 # a = pd.read_csv("Daily_values_per_us_or_not.csv")
 
-def grab_trades_data(from_date):
+def grab_volume_data(from_date):
     sq = f"""
     select s.Date, s.isOwnData, s.FirstSequenceItemName as [Venue], sum(val) as [Volume]
     from
@@ -152,7 +161,9 @@ def grab_trades_data(from_date):
       where DateTime > '{from_date}'
       --and SeqSpan = 'Single'
       and ((InstId in ('10000310', '10000312')) or (FirstSequenceItemID in (1, 2,4,6,7,30)))
+      and firstSequenceID in ('10000302', '10000314', '10410041')
       --and FirstSequenceItemId = 2
+      and instId in {inst_ids}
       ) a) s
       group by isOwnData, [Date], FirstSequenceItemName
     """
@@ -166,63 +177,61 @@ def plot_market_share_data():
         st.session_state.last_share_refresh = pd.to_datetime('2021-01-01').tz_localize("UTC").tz_convert("Europe/Berlin")
     conds = (renew_trades_data, (np.array([x in st.session_state for x in ['share_data', 'volume_data', 'last_share_refresh']]) == False).any(), (now - st.session_state.last_usage_refresh).total_seconds() > 300)
     if any(conds):
-        if 'trades_data' not in st.session_state:
-            st.session_state.trades_data = grab_trades_data(st.session_state.last_share_refresh)
+        if 'volume_data' not in st.session_state:
+            st.session_state.volume_data = grab_volume_data(st.session_state.last_share_refresh)
         else:
-            st.session_state.trades_data = pd.concat([st.session_state.trades_data,grab_trades_data(st.session_state.last_share_refresh)])
-        
-        st.write(st.session_state.trades_data)
-        venues = np.array([x for x in st.session_state.trades_data.Venue.unique()])
-        products_to_include = np.array([st.checkbox(x) for x in venues])
-        a = st.session_state.trades_data.loc[st.session_state.trades_data.Venue.isin(products_to_include)]
-        b = a.pivot(index='Date', columns = 'isOwnData', values='Value').reset_index()
-        b.columns = ["Date","Market_value", "Our_value"]
-        b["percentage_InCo"] = b["Our_value"]/b[["Market_value","Our_value"]].sum(axis=1)
-        b.Date = b.Date.apply(pd.to_datetime)
-        
-        b["dayofweek"] = b.Date.dt.dayofweek
-        b["weekday"] = b["dayofweek"] < 5
-        b["weekday"] = b["weekday"].apply(lambda x: indmap[x])
-        b["dayofweek"] = b["dayofweek"].apply(lambda x: daymap[x])
+            st.session_state.volume_data = pd.concat([st.session_state.volume_data,grab_volume_data(st.session_state.last_share_refresh)])
+        st.session_state.share_data = st.session_state.volume_data.copy()
+        st.session_state.last_share_refresh = pd.to_datetime(dt.datetime.utcnow()).tz_localize("UTC").tz_convert("Europe/Berlin")
+    venues = np.array([x for x in st.session_state.volume_data.Venue.unique()])
+    st.sidebar.write("Which products are included in the survey?")
+    products_to_include = venues[np.array([st.sidebar.checkbox(x,True) for x in venues])]
+    st.write(f"products included: {inst_id_map}")
+    a = st.session_state.volume_data.loc[st.session_state.volume_data.Venue.isin(products_to_include)].groupby(['Date', 'isOwnData']).sum().round().reset_index()
 
-        b = b.set_index("Date")
-        b = b.sort_index()
-        b.percentage_InCo.plot()
-
-        plt.title("Fraction of prompt market share In Commodities")
-        plt.figure()
-        c = b.groupby("dayofweek")["percentage_InCo"]
-        c.plot(style='-*', legend=True)
-        plt.title("Fraction of prompt market share In Commodities")
-        
-        
-        plt.figure()
-        d = b.groupby([pd.Grouper(freq='W-SUN'),
-                        "weekday"])["percentage_InCo"].mean().unstack()
-        d.index = d.index.date
-        d.plot(kind='bar', legend=True)
-        # plt.legend(["Weekday", "Weekend"])
-        plt.title("Fraction of prompt market share In Commodities")
-
-
-# # traders = pd.read_clipboard()
-# uni_traders = set(traders["day trader"].values).union(set(traders["night trader"].values))
-
-# for trader in uni_traders:
-#     print("{} average market share in the weekend in last year: {}".format(
-#         trader, round(traders.loc[(traders["day trader"] == trader) | (traders["night trader"] == trader) , "market share"].mean(),3)))
-
-# for trader in uni_traders:
-#     print("{} average market share in the weekend from winter start: {}".format(
-#         trader, round(traders.iloc[:28].loc[(traders["day trader"] == trader) | (traders["night trader"] == trader) , "market share"].mean(),3)))
-
-
+    b = a.pivot(index='Date', columns = ['isOwnData'], values='Volume').reset_index()
+    b.columns = ["Date","Market_volume", "Our_volume"]
+    b["percentage_InCo"] = b["Our_volume"]/b[["Market_volume", "Our_volume"]].sum(axis=1)
+    b.Date = b.Date.apply(pd.to_datetime)
     
-""" 
-project 2:
-    pull data per trader per day out of GasTransactions
-    map onto bar chart  
+    b["dayofweek"] = b.Date.dt.dayofweek
+    b["weekday"] = b["dayofweek"] < 5
+    b["weekday"] = b["weekday"].apply(lambda x: indmap[x])
+    b["dayofweek"] = b["dayofweek"].apply(lambda x: daymap[x])
+
+    b = b.set_index("Date")
+    st.session_state.share_data = b.sort_index()
+    st.session_state.share_data.index = st.session_state.share_data.index.tz_localize("UTC").tz_convert("Europe/Berlin").date
+
+    # run_trade_fetch()
+    date_def = pd.to_datetime(f"{now.year}-{now.month}-{now.day}")
+    fdate = st.sidebar.date_input("From date (date is included)", value = date_def - dt.timedelta(days = 60))
+    tdate = st.sidebar.date_input("To date (date itself not included)", value = date_def + dt.timedelta(days=1))
     
-project 3:
-    cross-correlate market share with price movement.
-"""
+    b = b.loc[fdate:tdate]
+    
+    # c = b.groupby("dayofweek")["percentage_InCo"]
+    d = b.groupby([pd.Grouper(freq='W-SUN'),
+                    "weekday"])["percentage_InCo"].mean().unstack()
+    b.index = b.index.tz_localize("UTC").tz_convert("Europe/Berlin").date
+    
+    d.index = d.index.tz_localize("UTC").tz_convert("Europe/Berlin").date
+    
+    fig0, ax0 = plt.subplots()
+    # fig1, ax1 = plt.subplots()
+    fig2, ax2 = plt.subplots()
+    
+    b.percentage_InCo.plot(ax=ax0)
+    for tick in ax0.get_xticklabels():
+        tick.set_rotation(90)
+    # c.plot(style='-*', legend=True, ax=ax1)
+        
+    d.plot(kind='bar', legend=True, ax=ax2)
+    l,r = st.beta_columns((2,3))
+    with l:
+        st.write("**Fraction of prompt market share In Commodities**")
+        st.pyplot(fig0)
+        # st.pyplot(fig1)
+        st.pyplot(fig2)
+    with r:        
+        st.write(b)
